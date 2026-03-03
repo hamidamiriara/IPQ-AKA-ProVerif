@@ -46,8 +46,9 @@ This repository contains one ProVerif model per formal security claim.
 
 Each model is self-contained and includes detailed comments mapping the formal verification to the corresponding section of the manuscript.
 
-How to Run the Models
+---
 
+## How to Run the Models
 Ensure ProVerif 2.05 is installed.
 
 Run:
