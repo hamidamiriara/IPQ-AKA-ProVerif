@@ -66,7 +66,7 @@ The output will indicate whether the specified secrecy or correspondence queries
 
 ---
 
-## ⚠ Modeling Assumptions
+## Modeling Assumptions
 
 - Symbolic Dolev–Yao adversary with full network control
 - Perfect cryptography assumption
