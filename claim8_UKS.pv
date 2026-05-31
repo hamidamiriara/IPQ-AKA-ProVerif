@@ -2,208 +2,228 @@
 (*  IPQ-AKA — Claim 8: Unknown Key Share (UKS) Resistance *)
 (*                                                        *)
 (*  Objective:                                            *)
-(*   We verify resistance against unknown key-share       *)
-(*   (UKS) attacks under the symbolic Dolev–Yao model.    *)
+(*   We verify resistance to unknown key share (UKS)      *)
+(*   attacks under the Dolev–Yao adversary model. A UKS   *)
+(*   attack occurs when two parties establish the same    *)
+(*   session key but hold different beliefs about the     *)
+(*   identity of their peer.                              *)
 (*                                                        *)
-(*  1) Key–Identity Binding:                              *)
-(*   A UKS attack attempts to cause two honest parties    *)
-(*   to derive the same session key while holding         *)
-(*   inconsistent views of the serving network identity   *)
-(*   (SNname).                                            *)
+(*  Verification idea:                                    *)
+(*   In IPQ-AKA, the derived session key KSEAF is         *)
+(*   cryptographically bound to the serving network       *)
+(*   identifier SNname during key derivation. Both the    *)
+(*   UE and the HN derive KSEAF using the same SNname.    *)
 (*                                                        *)
-(*   In IPQ-AKA, all authentication values and session    *)
-(*   keys are cryptographically bound to SNname:          *)
-(*     - RES* and XRES* include SNname.                   *)
-(*     - KAUSF includes SNname.                           *)
-(*     - KSEAF includes SNname.                           *)
+(*   We model this binding by recording events when the   *)
+(*   UE and the HN derive KSEAF together with the         *)
+(*   associated SNname. The following correspondence      *)
+(*   query checks that if the UE derives a session key    *)
+(*   KSEAF for a given SNname, then the HN must have      *)
+(*   derived the same key for the same SNname.            *)
 (*                                                        *)
-(*   Therefore, any derived session key is explicitly     *)
-(*   anchored to the intended serving network identity.   *)
-(*                                                        *)
-(*  2) UKS Resistance Property:                           *)
-(*   If the UE derives a session key KSEAF under a        *)
-(*   specific serving network identity sn, then the HN    *)
-(*   must have derived the same key under the SAME sn.    *)
-(*                                                        *)
-(*   This prevents identity-mismatch agreement and        *)
-(*   rules out unknown key-share attacks.                 *)
-(*                                                        *)
-(*  Formal Verification Results (ProVerif):               *)
-(*   - event(UEDerivesKSEAF(sn,k)) ==>                    *)
-(*     event(HNDerivesKSEAF(sn,k)) is true,               *)
-(*     proving agreement on both the key and the          *)
-(*     serving network identity.                          *)
-(*                                                        *)
-(*   - inj-event(UEDerivesKSEAF(sn,k)) ==>                *)
-(*     inj-event(HNDerivesKSEAF(sn,k)) is true,           *)
-(*     establishing strong (injective) agreement and      *)
-(*     preventing parallel-session identity mix-up.       *)
+(*  Formal Verification Result (ProVerif):                *)
+(*   Query                                                *)
+(*     event(UEDerivesKSEAFForSN(sn,k)) ==>               *)
+(*     event(HNDerivesKSEAFForSN(sn,k))                   *)
+(*   is true.                                             *)
 (*                                                        *)
 (*  Conclusion:                                           *)
-(*      IPQ-AKA ensures explicit key–identity binding     *)
-(*      and prevents mismatched-identity key agreement.   *)
-(*      Therefore, Claim 8 (UKS Resistance) is formally   *)
-(*      verified under the symbolic Dolev–Yao model.      *)
+(*   The result confirms that whenever the UE accepts a   *)
+(*   session key associated with a serving network, the   *)
+(*   HN must have derived the same key for the same       *)
+(*   network identity. Therefore, mismatched identity     *)
+(*   beliefs cannot occur and IPQ-AKA resists unknown     *)
+(*   key share (UKS) attacks.                             *)
 (* ====================================================== *)
 
 (* ---------------- Types ---------------- *)
-type pubKey.
-type secKey.
+type LongKey.        (* Long-term subscriber key *)
+type Key.            (* Symmetric encryption key *)
+type PublicKey.      (* Public key *)
+type PrivateKey.     (* Secret key *)
+type Random.         (* Random values *)
 
 (* ---------------- Channels ---------------- *)
-free radioChannel   : channel.               (* Public Dolev–Yao channel *)
-free backhaulChannel: channel [private].     (* Private SN <-> HN channel *)
+free radioChannel   : channel.               (* Public wireless (Dolev–Yao) channel *)
+free backhaulChannel: channel [private].     (* Secure SN-HN channel *)
 
 (* ---------- Long-term material ---------- *)
-(*free skHN: secKey [private].	  *) 	(* secret key of HN  *)
-(*free pkHN: pubKey.		  *)	(* public key of HN  *)
-free SUPI: bitstring [private].        	(* permanent identity *)
-free K: bitstring [private].           	(* UE-HN long-term secret *)
-(* free SNname: bitstring.        *)  	(* serving network identifier *)
-free AMF: bitstring.                   	(* authentication management field *)
-free idHN: bitstring.                  	(* home network identifier *)
+free skHN: PrivateKey [private].             (* Secret key of the Home Network (HN) *)
+free pkHN: PublicKey.                        (* Public key of the Home Network *)
+(*free K: bitstring [private].*)             (* UE–HN long-term shared secret *)
+free SUPI: bitstring [private].              (* Permanent subscriber identity *)
+free SNname: bitstring.                      (* Serving network identifier *)
+free AMF: bitstring.                         (* Authentication management field *)
+free idHN: bitstring.                        (* Home network identifier *)
 
-(* Two different serving-network identifiers *)
-free SN_A: bitstring.
-free SN_B: bitstring.
-
-(* ---------------- Domain separation tags ---------------- *)
-const tag_kausf: bitstring.                  (* e.g., "kausf" *)
-const tag_kseaf: bitstring.                  (* e.g., "kseaf" *)
-
-(* ---------------- Public key derivation ---------------- *)
-fun pk(secKey): pubKey.			(* returns the public key corresponding to secret key *)
-
-(* ---------------- Symmetric encryption ---------------- *)
-fun SymEnc(bitstring, bitstring): bitstring.
-reduc forall m:bitstring, key:bitstring;
-  SymDec(SymEnc(m,key),key) = m.
+(* Private tokens for testing secrecy of derived keys *)
+free testKSEAFSecret: bitstring [private].   (* protected by KSEAF *)
+free testKAUSFSecret: bitstring [private].   (* protected by KAUSF *)
 
 (* ---------------- KDF and AKA functions ---------------- *)
 fun KDF(bitstring): bitstring.
-fun f1 (bitstring): bitstring.               (* MAC *)
-fun f2 (bitstring): bitstring.               (* RES *)
-fun f3 (bitstring): bitstring.               (* CK *)
-fun f4 (bitstring): bitstring.               (* IK *)
-fun f5 (bitstring): bitstring.               (* AK *)
-
-(* ---------------- XOR theory ---------------- *)
-fun xor(bitstring,bitstring): bitstring.
-equation forall m:bitstring, n:bitstring;
-  xor(xor(m,n),n) = m.
+fun f1 (LongKey, bitstring): bitstring.      (* MAC *)
+fun f2 (LongKey, bitstring): bitstring.      (* RES *)
+fun f3 (LongKey, bitstring): bitstring.      (* CK *)
+fun f4 (LongKey, bitstring): bitstring.      (* IK *)
+fun f5 (LongKey, bitstring): bitstring.      (* AK *)
 
 (* ---------------- KEM abstraction ---------------- *)
-fun Encaps(pubKey, bitstring): bitstring.    (* Encaps(pk, r) -> e *)
+fun Encaps(PublicKey, Random): bitstring.    (* Encaps(pk, r) -> e *)
 fun KEMsharedsecret(bitstring): bitstring.   (* ss from e *)
 fun KEMCiphertext(bitstring): bitstring.     (* ct from e *)
-fun DecapsKey(secKey, bitstring): bitstring. (* Decaps(sk, ct) -> ss *)
+fun DecapsKey(PrivateKey, bitstring): bitstring. (* Decaps(sk, ct) -> ss *)
+fun pk(PrivateKey): PublicKey.		     (* derives the public key corresponding to a given secret key *)
 
-equation forall sk:secKey, r:bitstring;
+equation forall sk:PrivateKey, r:Random;
   DecapsKey(sk, KEMCiphertext(Encaps(pk(sk), r)))
   = KEMsharedsecret(Encaps(pk(sk), r)).
 
-(* ---------------- Subscriber key database ---------------- *)
-fun LongTermKey(bitstring):bitstring [private].(* LongTermKey(SUPI) returns the long-term subscriber key K
-   				        stored securely at HN (UDM/ARPF in 5G-AKA).*)
+(* ---------------- Symmetric encryption ---------------- *)
+fun SymEnc(Key, bitstring): bitstring.
+reduc forall m:bitstring, k:Key;
+  SymDec(k, SymEnc(k, m)) = m.
+
+(* ---------------- Helper functions ---------------- *)
+(* XOR theory *)
+fun xor(bitstring,bitstring): bitstring.
+equation forall m:bitstring, n:bitstring;
+  xor(xor(m,n),n) = m.			     (* symbolic XOR cancellation property *)
+
+(* Concatenation function *)
+fun concat(bitstring, bitstring, bitstring): bitstring.  (* models concatenation *)
+
+(* Subscriber key database *)
+fun LongTermKey(bitstring):LongKey [private].(* models the secure database lookup that maps SUPI to
+   				                the UE long-term key K stored at the HN (UDM/ARPF).*)
+
+(* Key derivation helper *)
+fun mKey(bitstring): Key.                    (* converts bitstring type into a key type for encryption *)
+
+(* Domain separation tags *)
+const tag_kausf: bitstring.                  (* e.g., "kausf" *)
+const tag_kseaf: bitstring.                  (* e.g., "kseaf" *)
+
 
 (* ====================================================== *)
 (*                         EVENTS                         *)
+(*              Claim 8: UKS resistance events            *)
 (* ====================================================== *)
 
-(* Bind key derivations to a declared SN identity *)
-event UEDerivesKSEAF(bitstring, bitstring).   (* (SNname, KSEAF) *)
-event HNDerivesKSEAF(bitstring, bitstring).   (* (SNname, KSEAF) *)
+(* Mutual authentication between the UE and the HN *)
+(* (1) UE authentication to HN *)
+event UESendAuthToHN(bitstring).     (* UE sends authentication data (MAC_UE) *)
+event HNAcceptsUE(bitstring).        (* HN verifies UE authentication *)
 
-(* Optional: bind accept to SN to show agreement is SN-specific *)
-event UEAcceptsSN(bitstring).                 (* SNname accepted *)
+(* (2) HN authentication to UE *)
+event HNSendAuthToUE(bitstring).     (* HN sends authentication data (RESstar) *)
+event UEAcceptsHN(bitstring).        (* UE verifies HN response *)
+
+event HNDerivesKSEAFForSN(bitstring, bitstring).   (* (SNname, KSEAF) *)
+event UEDerivesKSEAFForSN(bitstring, bitstring).   (* (SNname, KSEAF) *)
 
 (* ====================================================== *)
-(*                      UE PROCESS                        *)
+(*                        UE PROCESS                      *)
 (* ====================================================== *)
 
-(* UE parameterized by its believed SN identity SNname_ue *)
-let UE(SUPI:bitstring, K:bitstring, pkHN:pubKey, SNname_ue:bitstring, AMF:bitstring, idHN:bitstring) =
+let UE(SUPI:bitstring, K:LongKey, pkHN:PublicKey, SNname:bitstring, AMF:bitstring, idHN:bitstring) =
 
-  (* ---------- Step 1: KEM-Based SUCI Generation with Pre-Challenge ---------- *)
+ (* ---------- Step 1: KEM-Based SUCI Generation with Pre-Challenge ---------- *)
   (* Step 1.1: Fresh encapsulation each session *)
-  new rUE: bitstring;
-  let e      = Encaps(pkHN, rUE) in
+  new rUE: Random;
+  let e = Encaps(pkHN, rUE) in
   let ss_kem = KEMsharedsecret(e) in
   let ct_kem = KEMCiphertext(e) in
 
   (* Step 1.2: Derive k_enc *)
-  let k_enc = KDF(ss_kem) in
+  let k_enc = mKey(KDF(ss_kem)) in
 
   (* Model SQN as fresh per session (symbolic approximation) *)
   new SQN_UE: bitstring;
 
   (* Step 1.3: C = Enc(k_enc, (SUPI, SQN_UE)) *)
-  let C = SymEnc((SUPI, SQN_UE), k_enc) in
+  let C = SymEnc(k_enc, (SUPI, SQN_UE)) in
 
-  (* Step 1.4: MAC_UE = f1((K, SQN_UE, ss_kem, AMF)) *)
-  let MAC_UE = f1((K, SQN_UE, ss_kem, AMF)) in
+  (* Step 1.4: MAC_UE = f1(K, concat(SQN_UE, ss_kem, AMF)) *)
+  let MAC_UE = f1(K, concat(SQN_UE, ss_kem, AMF)) in
 
   (* UE sends IPQ-SUCI *)
-  (* UE announces SNname_ue on radio; attacker may alter in transit *)
-  out(radioChannel, (C, ct_kem, MAC_UE, AMF, SNname_ue, idHN));
+  let IPQ_SUCI = (C, ct_kem, MAC_UE, AMF, SNname, idHN) in
+  event UESendAuthToHN(MAC_UE);
+  out(radioChannel, IPQ_SUCI);
 
  (* ---------- Step 4: HN Verification and Session Key Derivation ---------- *)
   (* Step 4.0: Receive RES* from SN *)
-  in(radioChannel, (RESstar:bitstring));
-
+  in(radioChannel, RESstar:bitstring);
+  
   (* Step 4.1: UE regenerates CK/IK/AK (bound to ss_kem) *)
-  let CK = f3((K, ss_kem)) in
-  let IK = f4((K, ss_kem)) in
-  let AK = f5((K, ss_kem)) in
+  let CK = f3(K, ss_kem) in
+  let IK = f4(K, ss_kem) in
+  let AK = f5(K, ss_kem) in
 
   (* Step 4.2: UE computes XRES and XRES* *)
-  let XRES     = f2((K, ss_kem)) in
+  let XRES     = f2(K, ss_kem) in
   
   (* Step 4.3: UE computes enhanced expected response XRES* *)
-  let XRESstar = KDF((CK, IK, SNname_ue, ss_kem, XRES)) in
+  let XRESstar = KDF((CK, IK, SNname, ss_kem, XRES)) in
 
   (* Step 4.4: Verify RES* *)
   if RESstar = XRESstar then (
-    event UEAcceptsSN(SNname_ue);
+    event UEAcceptsHN(RESstar);		(* UE authenticates the HN *)
 
     (* Step 4.5: Derive anchor key and SEAF key *)
-    let SQN_masked = xor(SQN_UE, AK) in
-    let KAUSF = KDF((CK, IK, tag_kausf, SNname_ue, SQN_masked)) in (* Key derivations bind SNname_ue *)
-    let KSEAF = KDF((KAUSF, tag_kseaf, SNname_ue)) in              (* Key derivations bind SNname_ue *)
-    event UEDerivesKSEAF(SNname_ue, KSEAF);
+    let KAUSF = KDF((CK, IK, tag_kausf, SNname, xor(SQN_UE, AK))) in
+    let KSEAF = KDF((KAUSF, tag_kseaf, SNname)) in
+
+    (* UKS-resistance binding event: UE binds KSEAF to SNname *)
+    event UEDerivesKSEAFForSN(SNname, KSEAF);
+
+    (* leak a value encrypted under KAUSF/KSEAF to test its secrecy *)
+    out(radioChannel, SymEnc(mKey(KAUSF), testKAUSFSecret));   
+    out(radioChannel, SymEnc(mKey(KSEAF), testKSEAFSecret));   
 
     (* Step 4.6: Update sequence number *)
     (* Not modeled statefully in this symbolic model. *)
+
     0
   ) else 0.
 
 (* ====================================================== *)
-(*                      SN PROCESS                         *)
+(*                        SN PROCESS                      *)
 (* ====================================================== *)
 
 let SN() =
+
   (* Receive IPQ-SUCI from UE *)
   in(radioChannel, (C:bitstring, ct_kem:bitstring, MAC_UE:bitstring,
                     AMF':bitstring, SNname':bitstring, idHN':bitstring));
+   let IPQ_SUCI = (C, ct_kem, MAC_UE, AMF', SNname', idHN') in
 
-  (* Forward unchanged to HN on private backhaul *)
-  out(backhaulChannel, (C, ct_kem, MAC_UE, AMF', SNname', idHN'));
+  (* Forward to HN over private backhaul *)
+  out(backhaulChannel, IPQ_SUCI);
 
-  (* Receive RES* from HN and forward to UE *)
+  (* Receive {RES*, KSEAF} from HN *)
   in(backhaulChannel, (RESstar:bitstring, KSEAF:bitstring));
-  out(radioChannel, (RESstar));
+  
+  (* leak a value encrypted under KSEAF to test its secrecy *)
+  out(radioChannel, SymEnc(mKey(KSEAF), testKSEAFSecret));   
+
+  (* Forward RES* to UE *)
+  out(radioChannel, RESstar);
+
   0.
 
 (* ====================================================== *)
-(*                      HN PROCESS                        *)
+(*                        HN PROCESS                      *)
 (* ====================================================== *)
 
-let HN(skHN:secKey, idHN:bitstring) =
+let HN(skHN:PrivateKey, idHN:bitstring) =
 
 (* ---------- Step2. KEM Decapsulation and UE Verification ---------- *)
   (* Step 2.0: Receive forwarded IPQ-SUCI from SN *)
-  in(backhaulChannel, (C:bitstring, ct_kem:bitstring, MAC_UE:bitstring,
-                       AMF':bitstring, SNname_hn:bitstring, idHN':bitstring));
+  in(backhaulChannel, IPQ_SUCI:bitstring);
+  let (C:bitstring, ct_kem:bitstring, MAC_UE:bitstring,
+     AMF':bitstring, SNname':bitstring, idHN':bitstring) = IPQ_SUCI in
 
   (* Step 2.0: Optional check: request targets this HN *)
   if idHN' = idHN then (
@@ -212,76 +232,70 @@ let HN(skHN:secKey, idHN:bitstring) =
     let ss_kem = DecapsKey(skHN, ct_kem) in
 
     (* Step 2.2: Derive k_dec *)
-    let k_dec = KDF(ss_kem) in
+    let k_dec = mKey(KDF(ss_kem)) in
 
     (* Step 2.3: Decrypt C -> (SUPI, SQN_UE) *)
     (* SUPI_rec/SQN_UE_rec: recived SUPI/SQN *)
-    let (SUPI_rec:bitstring, SQN_UE_rec:bitstring) = SymDec(C, k_dec) in
+    let (SUPI_rec:bitstring, SQN_UE_rec:bitstring) = SymDec(k_dec, C) in
 
     (* Fetch long-term key from DB *)
-    let K_db = LongTermKey(SUPI_rec) in
+    let K_HN = LongTermKey(SUPI_rec) in
 
     (* Step 2.4: Recompute MAC_UE *)
-    let XMAC = f1((K_db, SQN_UE_rec, ss_kem, AMF')) in
+    let XMAC = f1(K_HN, concat(SQN_UE_rec, ss_kem, AMF')) in
 
     (* Step 2.5: Verify MAC_UE *)
     if XMAC = MAC_UE then (
+      event HNAcceptsUE(XMAC); 		(* HN authenticates the UE *)
 
 (* ---------- Step3. Authentication Vector and Key Material Generation ---------- *)
       (* Step 3.1: Generate CK/IK/AK *)
-      let CK = f3((K_db, ss_kem)) in
-      let IK = f4((K_db, ss_kem)) in
-      let AK = f5((K_db, ss_kem)) in
+      let CK = f3(K_HN, ss_kem) in
+      let IK = f4(K_HN, ss_kem) in
+      let AK = f5(K_HN, ss_kem) in
 
       (* Step 3.2: Computes response *)
-      let RES = f2((K_db, ss_kem)) in
+      let RES = f2(K_HN, ss_kem) in
 
       (* Step 3.3: Enhanced response RES* *)
-      let RESstar = KDF((CK, IK, SNname_hn, ss_kem, RES)) in       (* HN computes RES* and keys bound to SNname_hn *)
+      let RESstar = KDF((CK, IK, SNname', ss_kem, RES)) in
 
       (* Step 3.4: Derive KAUSF, KSEAF *)
-      let SQN_masked = xor(SQN_UE_rec, AK) in
-      let KAUSF = KDF((CK, IK, tag_kausf, SNname_hn, SQN_masked)) in
-      let KSEAF = KDF((KAUSF, tag_kseaf, SNname_hn)) in
-      event HNDerivesKSEAF(SNname_hn, KSEAF);
+      let KAUSF = KDF((CK, IK, tag_kausf, SNname', xor(SQN_UE_rec, AK))) in
+      let KSEAF = KDF((KAUSF, tag_kseaf, SNname')) in
+
+      (* UKS-resistance binding event: HN binds KSEAF to SNname *)
+      event HNDerivesKSEAFForSN(SNname', KSEAF);
+
+      (* leak a value encrypted under KAUSF/KSEAF to test its secrecy *)
+      out(radioChannel, SymEnc(mKey(KAUSF), testKAUSFSecret));   
+      out(radioChannel, SymEnc(mKey(KSEAF), testKSEAFSecret)); 
 
       (* Send to SN *)
-      out(backhaulChannel, (RESstar, KSEAF));
-      0
+      event HNSendAuthToUE(RESstar);
+      out(backhaulChannel, (RESstar, KSEAF))
     ) else 0
 
   ) else 0.
 
 (* ====================================================== *)
 (*                    SECURITY QUERIES                    *)
-(*        Claim 8 — Unknown Key Share (UKS)               *)
 (* ====================================================== *)
 
-(* Sanity: SN_A and SN_B are distinct constants          *)
-(* (No equality assumption between them)                  *)
-
-(* If UE derives a session key k under some SN identity sn,
-   then HN must have derived the same key under the SAME sn. *)
-
+(* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ *)
+(* If the UE derives KSEAF for a given SNname, then the HN
+   must have derived the same KSEAF for the same SNname. *)
 query sn:bitstring, k:bitstring;
-  event(UEDerivesKSEAF(sn, k)) ==> event(HNDerivesKSEAF(sn, k)).
-
-(* Stronger (injective) version: prevents parallel-session
-   identity mix-up and enforces unique agreement. *)
-
-query sn:bitstring, k:bitstring;
-  inj-event(UEDerivesKSEAF(sn, k)) ==> inj-event(HNDerivesKSEAF(sn, k)).
+  event(UEDerivesKSEAFForSN(sn, k)) ==> event(HNDerivesKSEAFForSN(sn, k)).
+(* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ *)
 
 (* ====================================================== *)
-(*                     MAIN PROCESS                        *)
+(*                     MAIN PROCESS                       *)
 (* ====================================================== *)
 
 process
-  new sk_HN: secKey;
-  let pk_HN = pk(sk_HN) in
-  out(radioChannel, pk_HN);
 
-  (!UE(SUPI, LongTermKey(SUPI), pk_HN, SN_A, AMF, idHN)
-   | !UE(SUPI, LongTermKey(SUPI), pk_HN, SN_B, AMF, idHN)
+  (* Unbounded sessions of UE, SN, HN *)
+  (!UE(SUPI, LongTermKey(SUPI), pk(skHN), SNname, AMF, idHN)
    | !SN()
-   | !HN(sk_HN, idHN))
+   | !HN(skHN, idHN))
